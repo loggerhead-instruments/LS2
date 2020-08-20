@@ -56,7 +56,7 @@ Adafruit_SSD1306 display(OLED_RESET);
 
 #define NREC 32 // increase disk buffer to speed up disk access
 
-static uint8_t myID[8];
+static uint32_t myID[2];
 
 unsigned long baud = 115200;
 
@@ -155,7 +155,7 @@ long nbufs_per_file;
 boolean settingsChanged = 0;
 
 long file_count;
-char filename[40];
+char filename[60];
 char dirname[20];
 int folderMonth;
 
@@ -326,7 +326,7 @@ void setup() {
 
   if (recMode==MODE_DIEL) setDielTime();  // adjust start time to diel mode
   
-  nbufs_per_file = (long) (ceil(((rec_dur * audio_srate / 256.0) / (float) NREC)) * (float) NREC);
+  nbufs_per_file = (long) (ceil(((rec_dur * audio_srate / 256.0) / (float) NREC)) * (float) NREC) * NCHAN;
   long ss = rec_int - wakeahead;
   if (ss<0) ss=0;
   snooze_hour = floor(ss/3600);
@@ -525,16 +525,11 @@ void startRecording() {
 
 byte buffer[NREC*512];
 void continueRecording() {
-  
-  Serial.println(queue1.available());
   if (queue1.available() >= NREC) {
-    if(printDiags) Serial.print(".");
     // one buffer is 512 bytes = 256 samples
     // readBuffer returns an int16 * that contains 256 bytes
     for(int ii=0;ii<NREC;ii++){ 
       byte *ptr = buffer+(ii*512);
-      if(printDiags) Serial.print(".");
-
       mxLR(ptr, queue1.readBuffer(), queue2.readBuffer()); // interleave 256 points from each
       queue1.freeBuffer(); 
       queue2.freeBuffer();  // free buffer
@@ -542,11 +537,11 @@ void continueRecording() {
     if(file.write(buffer, NREC*512)==-1) resetFunc(); //audio to .wav file
     
     buf_count += NREC;
-    Serial.print(buf_count);
-    Serial.print(" ");
-    Serial.println(buffer[1]<<8 | buffer[0]);
-    
-
+    if(printDiags){
+      Serial.print(buf_count);
+      Serial.print(" ");
+      Serial.println(buffer[1]<<8 | buffer[0]);
+    }
   }
 }
 
@@ -598,7 +593,7 @@ void FileInit()
 
    // open file 
    sd.chdir(dirname);
-   sprintf(filename,"%04d%02d%02dT%02d%02d%02d.wav", year(t), month(t), day(t), hour(t), minute(t), second(t));  //filename is DDHHMMSS
+   sprintf(filename,"%04d%02d%02dT%02d%02d%02d_%lu%lu_%2.1f.wav", year(t), month(t), day(t), hour(t), minute(t), second(t), myID[0], myID[1], gainDb);  //filename is DDHHMMSS
 
 
    // log file
@@ -617,10 +612,6 @@ void FileInit()
     if(file.open("LOG.CSV",  O_CREAT | O_APPEND | O_WRITE)){
   #endif
       file.print(filename);
-      file.print(',');
-      for(int n=0; n<8; n++){
-        file.print(myID[n]);
-      }
       file.print(',');
       file.print(gainDb); 
       file.print(',');
@@ -686,7 +677,7 @@ void logFileHeader(){
 #else
   if(file.open("LOG.CSV",  O_CREAT | O_APPEND | O_WRITE)){
 #endif
-      file.println("filename, ID, gain (dB), Voltage, Version");
+      file.println("filename, gain (dB), Voltage, Version");
       file.close();
   }
 }
@@ -779,28 +770,13 @@ void resetFunc(void){
   CPU_RESTART
 }
 
-
-void read_EE(uint8_t word, uint8_t *buf, uint8_t offset)  {
-  noInterrupts();
-  FTFL_FCCOB0 = 0x41;             // Selects the READONCE command
-  FTFL_FCCOB1 = word;             // read the given word of read once area
-
-  // launch command and wait until complete
-  FTFL_FSTAT = FTFL_FSTAT_CCIF;
-  while(!(FTFL_FSTAT & FTFL_FSTAT_CCIF))
-    ;
-  *(buf+offset+0) = FTFL_FCCOB4;
-  *(buf+offset+1) = FTFL_FCCOB5;       
-  *(buf+offset+2) = FTFL_FCCOB6;       
-  *(buf+offset+3) = FTFL_FCCOB7;       
-  interrupts();
-}
-
-    
 void read_myID() {
-  read_EE(0xe,myID,0); // should be 04 E9 E5 xx, this being PJRC's registered OUI
-  read_EE(0xf,myID,4); // xx xx xx xx
+//  myID[0] = SIM_UIDH;
+  myID[0] = SIM_UIDMH;
+  myID[1] = SIM_UIDML;
+//  myID[3] = SIM_UIDL;
 }
+
 
 float readVoltage(){
    float  voltage = 0;
@@ -889,37 +865,4 @@ void setDielTime(){
     Serial.print("Diel Rec Seconds");
     Serial.println(dielRecSeconds);
   }
-}
-
-boolean checkCamDielTime(int offsetMinutes){
-  
-  boolean startCam = 0;
-  unsigned int startMinutes = (startHour * 60) + (startMinute);
-  unsigned int endMinutes = (endHour * 60) + (endMinute );
-  unsigned int currentTimeMinutes = (hour(startTime) * 60) + minute(startTime) + offsetMinutes;
-
-  if(recMode==MODE_NORMAL) return 1;  // normal mode; always record
-
-  Serial.print("diel start Minutes");
-  Serial.println(startMinutes);
-  Serial.print("diel end Minutes");
-  Serial.println(endMinutes);
-  Serial.print("startTimeMinutes");
-  Serial.println(currentTimeMinutes);
-
-  // check if next currentTimeMinutes is between startMinutes and endMinutes
-  // e.g. 06:00 - 12:00 or 
-  if(startMinutes<endMinutes){
-    if((currentTimeMinutes >= startMinutes) & (currentTimeMinutes < endMinutes)) {
-      startCam = 1;
-      Serial.println("Start Time is within diel range 1");
-    }
-  }
-  else{ // e.g. 23:00 - 06:00
-    if(((currentTimeMinutes >= startMinutes) & (currentTimeMinutes<(24*60))) | ((currentTimeMinutes > 0) & (currentTimeMinutes < endMinutes))) {
-      startCam = 1;
-      Serial.println("Start Time is within diel range 2");
-    }
-  }
-  return startCam;
 }
