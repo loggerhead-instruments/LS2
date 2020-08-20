@@ -17,7 +17,7 @@
 //*****************************************************************************************
 
 char codeVersion[12] = "2020-08-20";
-static boolean printDiags = 1;  // 1: serial print diagnostics; 0: no diagnostics
+static boolean printDiags = 0;  // 1: serial print diagnostics; 0: no diagnostics
 #define MQ 100 // to be used with LHI record queue (modified local version)
 int roundSeconds = 10;//start time modulo to nearest roundSeconds
 int wakeahead = 5;  //wake from snooze to give hydrophone to power up
@@ -540,7 +540,7 @@ void continueRecording() {
     if(printDiags){
       Serial.print(buf_count);
       Serial.print(" ");
-      Serial.println(buffer[1]<<8 | buffer[0]);
+      Serial.println((int16_t) buffer[1]<<8 | buffer[0]);
     }
   }
 }
