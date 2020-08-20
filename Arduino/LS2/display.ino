@@ -1,6 +1,5 @@
 float mAmpRec = 95;  // 300 kHz: SanDisk 128 GB: 75 mA; 8 kHz: 53 mA; 2 mA if pull microSD; SanDisk 1 TB: 300 kHz:95 mA 8 kHz: 37 mA; 3.8 mA sleep
 float mAmpSleep = 3.8; // 300 kHz: 18 mA; 8 kHz: 18 mA (17 mA second sleep)
-float mAmpCam = 700;
 byte nBatPacks = 8;
 float mAhPerBat = 12000.0; // assume 12.0Ah per battery pack; good batteries should be 14000
 
@@ -382,8 +381,6 @@ void manualSettings(){
             display.print("Mode:");
             if (recMode==MODE_NORMAL)  display.print("Norm");
             if (recMode==MODE_DIEL) {
-              if(camFlag==0) display.print("Diel");
-              else
                 display.print("Diel*");
             }
             display.display();
@@ -563,8 +560,6 @@ void manualSettings(){
         recMode = updateVal(recMode, 0, 1);
         if (recMode==MODE_NORMAL)  display.print("Norm");
         if (recMode==MODE_DIEL) {
-          if(camFlag==0) display.print("Diel");
-          else
             display.print("Diel*");
         }
         break;
@@ -694,7 +689,7 @@ void displaySettings(){
 
   uint32_t totalRecSeconds = 0;
 
-  uint32_t fileBytes = (2 * rec_dur * lhi_fsamps[isf]) + 44;
+  uint32_t fileBytes = (2 * 2 * rec_dur * lhi_fsamps[isf]) + 44;
   float fileMB = (fileBytes + 32768) / 1000.0 / 1000.0; // add cluster size so don't underestimate fileMB
   float dielFraction = 1.0; //diel mode decreases time spent recording, increases time in sleep
   if(recMode==MODE_DIEL){
@@ -715,28 +710,10 @@ void displaySettings(){
     dielFraction = dielMinutes / (24.0 * 60.0); // fraction of day recording in diel mode
   }
 
-  float recDraw = mAmpRec + ((float) camFlag * mAmpCam);
+  float recDraw = mAmpRec;
   float recFraction = ((float) rec_dur * dielFraction) / (float) (rec_dur + rec_int);
   float sleepFraction = 1 - recFraction;
   float avgCurrentDraw = (recDraw * recFraction) + (mAmpSleep * sleepFraction);
-  if(camFlag & recMode==MODE_DIEL){
-    float audioOnlyFraction = (1.0-dielFraction) * ((float) rec_dur / (float) (rec_dur + rec_int));
-    avgCurrentDraw = (recDraw * recFraction) + (mAmpSleep * sleepFraction) + (mAmpRec * audioOnlyFraction); // this will overestimate because counting sleep twice
-//    Serial.print("Audio only fraction: ");
-//    Serial.println(audioOnlyFraction);
-  }
-
-//  Serial.print("Rec Fraction Sleep Fraction Avg Power:");
-//  Serial.print(rec_dur);
-//  Serial.print("  ");
-//  Serial.print(recFraction);
-//  Serial.print("  ");
-//  Serial.print(rec_int);
-//  Serial.print("  ");
-//  Serial.print(sleepFraction);
-//  Serial.print("  ");
-//  Serial.println(avgCurrentDraw);
-
 
   uint32_t powerSeconds = uint32_t (3600.0 * (nBatPacks * mAhPerBat / avgCurrentDraw));
 

@@ -17,10 +17,9 @@
 //*****************************************************************************************
 
 char codeVersion[12] = "2020-08-20";
-static boolean printDiags = 0;  // 1: serial print diagnostics; 0: no diagnostics
-int camFlag = 0;
+static boolean printDiags = 1;  // 1: serial print diagnostics; 0: no diagnostics
 #define MQ 100 // to be used with LHI record queue (modified local version)
-int roundSeconds = 60;//start time modulo to nearest roundSeconds
+int roundSeconds = 10;//start time modulo to nearest roundSeconds
 int wakeahead = 5;  //wake from snooze to give hydrophone to power up
 int noDC = 0; // 0 = freezeDC offset; 1 = remove DC offset; 2 = bypass
 #define NCHAN 2
@@ -275,11 +274,6 @@ void setup() {
   
   pinMode(hydroPowPin, OUTPUT);
   digitalWrite(hydroPowPin, HIGH);
-
-  // camera setup
-  pinMode(CAM_SW, OUTPUT);
-  digitalWrite(CAM_SW, LOW);
-  if(camFlag==1) wakeahead = 30; // give camera time to boot
   
   //setup display and controls
   pinMode(UP, INPUT_PULLUP);
@@ -320,8 +314,8 @@ void setup() {
   cDisplay();
 
 
-  if(rec_int > 60) roundSeconds = 60;
-  if(rec_int > 300) roundSeconds = 300;
+  if(rec_int >= 60) roundSeconds = 60;
+  if(rec_int >= 300) roundSeconds = 300;
   
   t = getTeensy3Time();
   startTime = t;
@@ -389,12 +383,6 @@ void loop() {
       displayClock(t, BOTTOM);
       display.display();
 
-      // turn on camera 30 seconds ahead of time if it is off
-      if((t >= startTime - wakeahead) & CAMON==0 & camFlag){ 
-        if(recMode==MODE_NORMAL) cam_wake();
-        if(recMode==MODE_DIEL & checkCamDielTime(1)) cam_wake();
-      }
-
       if(t >= startTime){      // time to start?
         if(noDC==0) {
           audio_freeze_adc_hp(); // this will lower the DC offset voltage, and reduce noise
@@ -403,12 +391,6 @@ void loop() {
           audio_bypass_adc_hp();
          }
         Serial.println("Record Start.");
-        
-        if (camFlag){
-          // start camera if normal record mode, or if diel mode and within time range
-          // needs to be called before next startTime is calculated
-          if(recMode==MODE_NORMAL | checkCamDielTime(0)==1) cam_start();
-        }
 
         // set current stop time and calculate next startTime
         if(recMode==MODE_NORMAL){
@@ -452,13 +434,14 @@ void loop() {
     if(digitalRead(UP)==0 & digitalRead(DOWN)==0){
       // stop recording
       queue1.end();
+      queue2.end();
       // update wav file header
       wav_hdr.rLen = 36 + buf_count * 256 * 2;
       wav_hdr.dLen = buf_count * 256 * 2;
       file.seek(0);
       file.write((uint8_t *)&wav_hdr, 44);
       file.close();
-      if(camFlag) cam_off(); //camera off
+
       display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  //initialize display
       delay(100);
       cDisplay();
@@ -498,7 +481,6 @@ void loop() {
             // de-select card
             I2S0_RCSR &= ~(I2S_RCSR_RE | I2S_RCSR_BCE);
             
-            if(camFlag & (CAMON>0)) cam_off(); //camera off if it got turned on
             if(printDiags){
               Serial.print("Snooze HH MM SS ");
               Serial.print(snooze_hour);
@@ -518,13 +500,9 @@ void loop() {
 
             digitalWrite(hydroPowPin, HIGH); // hydrophone on
             delay(300);  // give time for Serial to reconnect to USB
-            if(camFlag) cam_wake();
             AudioInit(isf);
             
             //audio_power_up();  // when use audio_power_down() before sleeping, does not always get LRCLK. This did not fix.  
-         }
-         else{
-          if(camFlag & (CAMON>0)) cam_stop();
          }
 
         display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  //initialize display
@@ -547,26 +525,28 @@ void startRecording() {
 
 byte buffer[NREC*512];
 void continueRecording() {
-  if (queue1.available() >= NREC*2) {
-    // Fetch 2 blocks (or multiples) from the audio library and copy
-    // into a 512 byte buffer.  micro SD disk access
-    // is most efficient when full (or multiple of) 512 byte sector size
-    // writes are used.
-    //digitalWrite(ledGreen, HIGH);
-    for(int ii=0;ii<NREC;ii++)
-    { byte *ptr = buffer+ii*512;
-      mxLR(buffer + (ii * 512), queue1.readBuffer(), queue2.readBuffer()); // interleave 
+  
+  Serial.println(queue1.available());
+  if (queue1.available() >= NREC) {
+    if(printDiags) Serial.print(".");
+    // one buffer is 512 bytes = 256 samples
+    // readBuffer returns an int16 * that contains 256 bytes
+    for(int ii=0;ii<NREC;ii++){ 
+      byte *ptr = buffer+(ii*512);
+      if(printDiags) Serial.print(".");
+
+      mxLR(ptr, queue1.readBuffer(), queue2.readBuffer()); // interleave 256 points from each
       queue1.freeBuffer(); 
       queue2.freeBuffer();  // free buffer
     }
     if(file.write(buffer, NREC*512)==-1) resetFunc(); //audio to .wav file
-      
-    buf_count += NREC;
-//WMXZ    audioIntervalCount += NREC;
     
-//    if(printDiags){
-//      Serial.print(".");
-//   }
+    buf_count += NREC;
+    Serial.print(buf_count);
+    Serial.print(" ");
+    Serial.println(buffer[1]<<8 | buffer[0]);
+    
+
   }
 }
 
@@ -647,13 +627,6 @@ void FileInit()
       file.print(voltage); 
       file.print(',');
       file.println(codeVersion);
-      if(voltage < 3.1){
-        if (camFlag){
-          cam_off();
-          camFlag = 0;
-          file.println("Camera off.");
-        }
-      }
       if(voltage < 3.0){
         file.println("Stopping because Voltage less than 3.0 V");
         file.close();  
